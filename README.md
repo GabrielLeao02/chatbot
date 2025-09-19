@@ -97,4 +97,8 @@ Um ambiente Docker está disponível na pasta `docker/` para facilitar a criaç�
     docker build -f docker/Dockerfile .
     ```
 
+    > **Observação:** execute o comando acima a partir da raiz do repositório.
+    > Construir usando a pasta `docker/` como contexto fará com que o Dockerfile
+    > não encontre o `package.json` nem o script de entrypoint.
+
 Os diretórios `volumes/cache` e `volumes/cachew` são montados como volumes para persistir a sessão do WhatsApp entre reinicializações do contêiner, e o `config/config.ini` é montado como somente leitura dentro da imagem.
