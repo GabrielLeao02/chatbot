@@ -18,8 +18,13 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci --only=production
+COPY package.json ./
+COPY package-lock.json* ./
+RUN if [ ! -f package.json ]; then \
+        echo >&2 "ERROR: package.json not found in the Docker build context. Ensure the build context points to the project root."; \
+        exit 1; \
+    fi \
+    && npm ci --only=production
 
 COPY . .
 
