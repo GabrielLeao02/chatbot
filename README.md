@@ -69,9 +69,9 @@
 
 ## Execução com Docker
 
-Um ambiente Docker está disponível na pasta `docker/` para facilitar a criação de contêineres do bot.
+Um ambiente Docker está disponível com o `Dockerfile` na raiz do projeto e os arquivos de orquestração na pasta `docker/`.
 
-1. Crie o arquivo de configuração copiando o template:
+1. Crie (ou atualize) o arquivo de configuração copiando o template:
 
     ```bash
     mkdir -p config
@@ -79,6 +79,9 @@ Um ambiente Docker está disponível na pasta `docker/` para facilitar a criaç�
     ```
 
     Ajuste as chaves `port`, `responseUrl`, `responseHostname` e `responsePath` conforme o ambiente.
+    Caso o arquivo não seja criado, o contêiner utilizará automaticamente o `config.ini.tpl`
+    embarcado na imagem. Ainda assim, recomenda-se manter um `config/config.ini` para
+    facilitar a customização.
 
 2. Opcionalmente ajuste o identificador do bot no `docker/docker-compose.yml` alterando a variável `BOT_ID`.
 
@@ -94,11 +97,11 @@ Um ambiente Docker está disponível na pasta `docker/` para facilitar a criaç�
     Para reconstruir manualmente a imagem com o mesmo contexto, execute a partir da raiz do projeto:
 
     ```bash
-    docker build -f docker/Dockerfile .
+    docker build .
     ```
 
     > **Observação:** execute o comando acima a partir da raiz do repositório.
-    > Construir usando a pasta `docker/` como contexto fará com que o Dockerfile
+    > Construir usando a pasta `docker/` como contexto fará com que o build
     > não encontre o `package.json` nem o script de entrypoint.
 
-Os diretórios `volumes/cache` e `volumes/cachew` são montados como volumes para persistir a sessão do WhatsApp entre reinicializações do contêiner, e o `config/config.ini` é montado como somente leitura dentro da imagem.
+Os diretórios `volumes/cache` e `volumes/cachew` são montados como volumes para persistir a sessão do WhatsApp entre reinicializações do contêiner, e toda a pasta `config/` é montada como somente leitura. Caso exista um `config.ini`, o entrypoint o copiará para `/app/config.ini` antes de iniciar o bot.
