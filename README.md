@@ -66,3 +66,28 @@
     * `$ sudo systemctl enable lydia.wachatbot999`
     * `$ sudo systemctl start lydia.wachatbot999`
         * onde 999 é o id do bot
+
+## Execução com Docker
+
+Um ambiente Docker está disponível na pasta `docker/` para facilitar a criação de contêineres do bot.
+
+1. Crie o arquivo de configuração copiando o template:
+
+    ```bash
+    mkdir -p config
+    cp config.ini.tpl config/config.ini
+    ```
+
+    Ajuste as chaves `port`, `responseUrl`, `responseHostname` e `responsePath` conforme o ambiente.
+
+2. Opcionalmente ajuste o identificador do bot no `docker/docker-compose.yml` alterando a variável `BOT_ID`.
+
+3. No diretório `docker/`, construa a imagem e suba o serviço:
+
+    ```bash
+    cd docker
+    docker compose build
+    docker compose up -d
+    ```
+
+Os diretórios `volumes/cache` e `volumes/cachew` são montados como volumes para persistir a sessão do WhatsApp entre reinicializações do contêiner, e o `config/config.ini` é montado como somente leitura dentro da imagem.
