@@ -29,6 +29,12 @@ COPY . .
 
 RUN mkdir -p cache/wwebjs_auth cachew/webjs_cache
 
+# Provide a default configuration inside the image so the container can
+# start even when a custom config.ini is not bind mounted.
+RUN if [ -f config.ini.tpl ] && [ ! -f config.ini ]; then \
+        cp config.ini.tpl config.ini; \
+    fi
+
 RUN if [ ! -f docker/docker-entrypoint.sh ]; then \
         echo >&2 "ERROR: docker/docker-entrypoint.sh not found in the Docker build context. Ensure you are building from the project root."; \
         exit 1; \

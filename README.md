@@ -71,7 +71,7 @@
 
 Um ambiente Docker está disponível na pasta `docker/` para facilitar a criação de contêineres do bot.
 
-1. Crie o arquivo de configuração copiando o template:
+1. Crie (ou atualize) o arquivo de configuração copiando o template:
 
     ```bash
     mkdir -p config
@@ -79,6 +79,9 @@ Um ambiente Docker está disponível na pasta `docker/` para facilitar a criaç�
     ```
 
     Ajuste as chaves `port`, `responseUrl`, `responseHostname` e `responsePath` conforme o ambiente.
+    Caso o arquivo não seja criado, o contêiner utilizará automaticamente o `config.ini.tpl`
+    embarcado na imagem. Ainda assim, recomenda-se manter um `config/config.ini` para
+    facilitar a customização.
 
 2. Opcionalmente ajuste o identificador do bot no `docker/docker-compose.yml` alterando a variável `BOT_ID`.
 
@@ -101,4 +104,4 @@ Um ambiente Docker está disponível na pasta `docker/` para facilitar a criaç�
     > Construir usando a pasta `docker/` como contexto fará com que o Dockerfile
     > não encontre o `package.json` nem o script de entrypoint.
 
-Os diretórios `volumes/cache` e `volumes/cachew` são montados como volumes para persistir a sessão do WhatsApp entre reinicializações do contêiner, e o `config/config.ini` é montado como somente leitura dentro da imagem.
+Os diretórios `volumes/cache` e `volumes/cachew` são montados como volumes para persistir a sessão do WhatsApp entre reinicializações do contêiner, e toda a pasta `config/` é montada como somente leitura. Caso exista um `config.ini`, o entrypoint o copiará para `/app/config.ini` antes de iniciar o bot.
