@@ -1,0 +1,16 @@
+[Unit]
+Description=Lydia - ChatBot do Whats (nodejs)
+After=network.target
+
+[Service]
+Type=simple
+User=lydians
+ExecStart=/usr/bin/node /home/lydians/wachatbot999/chatbot.js -b 999
+Restart=on-failure
+# Output to syslog
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=lydia-wachatbot999
+
+[Install]
+WantedBy=multi-user.target
