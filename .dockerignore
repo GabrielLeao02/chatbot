@@ -5,3 +5,4 @@ volumes/
 .git
 .gitignore
 Dockerfile
+!docker/docker-entrypoint.sh
