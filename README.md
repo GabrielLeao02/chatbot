@@ -90,4 +90,11 @@ Um ambiente Docker está disponível na pasta `docker/` para facilitar a criaç�
     docker compose up -d
     ```
 
+    O arquivo `docker-compose.yml` usa o repositório como contexto de build (`context: ..`).
+    Para reconstruir manualmente a imagem com o mesmo contexto, execute a partir da raiz do projeto:
+
+    ```bash
+    docker build -f docker/Dockerfile .
+    ```
+
 Os diretórios `volumes/cache` e `volumes/cachew` são montados como volumes para persistir a sessão do WhatsApp entre reinicializações do contêiner, e o `config/config.ini` é montado como somente leitura dentro da imagem.

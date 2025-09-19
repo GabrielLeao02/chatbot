@@ -18,8 +18,8 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY package.json ./
-COPY package-lock.json* ./
+COPY ./package.json ./
+COPY ./package-lock.json ./
 RUN if [ ! -f package.json ]; then \
         echo >&2 "ERROR: package.json not found in the Docker build context. Ensure the build context points to the project root."; \
         exit 1; \
@@ -30,7 +30,7 @@ COPY . .
 
 RUN mkdir -p cache/wwebjs_auth cachew/webjs_cache
 
-COPY docker-entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/docker-entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 EXPOSE 8081
