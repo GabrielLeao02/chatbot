@@ -4,7 +4,6 @@ services:
   chatbot:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
     container_name: wachatbot
     environment:
       - BOT_ID=999
