@@ -10,7 +10,7 @@ services:
       - BOT_ID=999
       - TZ=America/Sao_Paulo
     volumes:
-      - ../config/config.ini:/app/config.ini:ro
+      - ../config:/config:ro
       - ../volumes/cache:/app/cache
       - ../volumes/cachew:/app/cachew
     ports:
