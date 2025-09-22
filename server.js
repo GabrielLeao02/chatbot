@@ -3,6 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs/promises');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
 const qrcodeTerm = require('qrcode-terminal');
@@ -53,6 +54,51 @@ function toBool(x) {
   return String(x).toLowerCase() === 'true';
 }
 
+async function wipeStoredSessionData(key) {
+  const targets = [sessionPathForKey(key), cachePathForKey(key)];
+  await Promise.allSettled(
+    targets.map((target) => fs.rm(target, { recursive: true, force: true }))
+  );
+}
+
+function buildQrPayload(qr) {
+  if (!qr) return null;
+  return {
+    at: qr.ts,
+    pngDataUrl: qr.pngDataUrl || null,
+    svgString: qr.svgString || null,
+    raw: qr.raw || null
+  };
+}
+
+async function waitForNewQr(entry, timeoutMs = 15000, pollEveryMs = 250) {
+  if (!entry) return null;
+  if (entry.lastQR) {
+    return entry.lastQR;
+  }
+
+  const terminalStates = new Set(['failed', 'disconnected', 'ready', 'authenticated']);
+
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+
+    const check = () => {
+      if (entry.lastQR) {
+        return resolve(entry.lastQR);
+      }
+      if (terminalStates.has(entry.status)) {
+        return resolve(null);
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        return resolve(null);
+      }
+      setTimeout(check, pollEveryMs);
+    };
+
+    check();
+  });
+}
+
 /**
  * Cria uma instância nova (ou reinicializa) para a key.
  * @param {string} companyId
@@ -80,6 +126,10 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
       // já existe e não queremos reiniciar: apenas retorna
       return instances.get(key);
     }
+  }
+
+  if (forceRestart) {
+    await wipeStoredSessionData(key);
   }
 
   // Cria entry inicial
@@ -189,16 +239,7 @@ app.post('/instance/start', async (req, res) => {
       peopleId,
       status: entry.status,
       readyInfo: entry.readyInfo || null,
-      qr: entry.lastQR
-        ? {
-            at: entry.lastQR.ts,
-            // pegue um dos formatos abaixo conforme sua UI:
-            pngDataUrl: entry.lastQR.pngDataUrl || null,
-            svgString: entry.lastQR.svgString || null,
-            // raw somente se precisar renderizar em outra lib
-            raw: entry.lastQR.raw || null
-          }
-        : null
+      qr: buildQrPayload(entry.lastQR)
     });
   } catch (e) {
     console.error(e);
@@ -219,20 +260,14 @@ app.post('/instance/restart', async (req, res) => {
     }
 
     const entry = await ensureInstance(companyId, peopleId, { forceRestart: true });
+    const qrInfo = await waitForNewQr(entry);
 
     return res.json({
       ok: true,
       companyId,
       peopleId,
       status: entry.status,
-      qr: entry.lastQR
-        ? {
-            at: entry.lastQR.ts,
-            pngDataUrl: entry.lastQR.pngDataUrl || null,
-            svgString: entry.lastQR.svgString || null,
-            raw: entry.lastQR.raw || null
-          }
-        : null
+      qr: buildQrPayload(qrInfo)
     });
   } catch (e) {
     console.error(e);
