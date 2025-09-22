@@ -2,7 +2,15 @@
 extends layout
 
 block content
-  p 
-  img(src=qrcode)
+  if status && status.status
+    p
+      strong Status:
+      |  #{status.status}
+  if status && status.message
+    p= status.message
+  else if qrcode
+    img(src=qrcode, alt='WhatsApp QR code')
+  else
+    p QR code not available yet. Please refresh after a few moments.
   
   

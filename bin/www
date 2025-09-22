@@ -4,9 +4,7 @@
  * Module dependencies.
  */
 
-var { app, lydiabot} = require('../app');
-
-global.lydiabot = lydiabot;
+var { app } = require('../app');
 
 var debug = require('debug')('lywabot:server');
 var http = require('http');

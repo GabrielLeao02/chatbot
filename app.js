@@ -42,6 +42,6 @@ app.use(function(err, req, res, next) {
   res.render('error');
 });
 
-const lydiabot = require('./lib/LydiaBot')()
+const { sessionManager } = require('./lib');
 
-module.exports = {app, lydiabot};
+module.exports = {app, sessionManager};
