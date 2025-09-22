@@ -1,9 +1,0 @@
-port = 8081
-maxAuthenticateCount = 5
-headless = true
-responseHostname = "execute.lydia.com.br"
-responsePath = "/php/wabotreceptteste.php"
-responseUrl = "http://execute.lydia.com.br/php/wabotreceptteste.php"
-fakeMSG = false
-disableUnreadMessage = false
-waVersionRemotePath = ''
