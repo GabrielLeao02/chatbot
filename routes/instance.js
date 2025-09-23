@@ -177,30 +177,61 @@ function buildQrPayload(qr) {
     };
 }
 
-async function waitForNewQr(entry, { timeoutMs = WAIT_FOR_QR_TIMEOUT_MS, pollEveryMs = WAIT_FOR_QR_POLL_MS } = {}) {
+async function waitForNewQr(entry, { timeoutMs = WAIT_FOR_QR_TIMEOUT_MS, pollEveryMs = WAIT_FOR_QR_POLL_MS, beatEveryMs: rawBeatMs } = {}) {
+    const beatEveryMs = Number.isFinite(rawBeatMs) && rawBeatMs > 0
+        ? rawBeatMs
+        : Math.max(5000, pollEveryMs * 20);
+
     if (!entry) {
-        return { qr: null, timedOut: false, status: 'not_created' };
+        console.log('[QR_WAIT] (no-entry) Skip wait: instance entry not created');
+        return { qr: null, timedOut: false, status: 'not_created', logContext: null };
     }
+
+    const key = entry.key || 'unknown';
+
     if (entry.lastQR) {
-        return { qr: entry.lastQR, timedOut: false, status: entry.status };
+        const contextId = `${key}:${Date.now()}`;
+        console.log(`[QR_WAIT] (${contextId}) Returning cached QR without waiting`);
+        return { qr: entry.lastQR, timedOut: false, status: entry.status, logContext: contextId };
     }
 
     const terminalStates = new Set(['failed', 'disconnected', 'ready', 'authenticated']);
 
     return new Promise((resolve) => {
         const startedAt = Date.now();
+        const contextId = `${key}:${startedAt}`;
+        let lastBeatAt = startedAt;
 
-        const finish = (qr, timedOut) => resolve({ qr, timedOut, status: entry.status });
+        console.log(`[QR_WAIT] (${contextId}) Starting wait (status=${entry.status}, timeoutMs=${timeoutMs}, pollEveryMs=${pollEveryMs})`);
+
+        const finish = (qr, timedOut, reason) => {
+            const elapsed = Date.now() - startedAt;
+            if (reason === 'qr') {
+                console.log(`[QR_WAIT] (${contextId}) QR received after ${elapsed}ms (status=${entry.status})`);
+            } else if (reason === 'terminal') {
+                console.log(`[QR_WAIT] (${contextId}) Finished due to terminal status=${entry.status} after ${elapsed}ms`);
+            } else if (reason === 'timeout') {
+                console.log(`[QR_WAIT] (${contextId}) Timed out after ${elapsed}ms (lastStatus=${entry.status})`);
+            } else {
+                console.log(`[QR_WAIT] (${contextId}) Finished (reason=${reason}) after ${elapsed}ms (status=${entry.status})`);
+            }
+            resolve({ qr, timedOut, status: entry.status, logContext: contextId });
+        };
 
         const check = () => {
             if (entry.lastQR) {
-                return finish(entry.lastQR, false);
+                return finish(entry.lastQR, false, 'qr');
             }
             if (terminalStates.has(entry.status)) {
-                return finish(null, false);
+                return finish(null, false, 'terminal');
             }
-            if (Date.now() - startedAt >= timeoutMs) {
-                return finish(null, true);
+            const now = Date.now();
+            if (now - startedAt >= timeoutMs) {
+                return finish(null, true, 'timeout');
+            }
+            if (now - lastBeatAt >= beatEveryMs) {
+                console.log(`[QR_WAIT] (${contextId}) Still waiting... elapsed=${now - startedAt}ms status=${entry.status}`);
+                lastBeatAt = now;
             }
             setTimeout(check, pollEveryMs);
         };
@@ -221,10 +252,15 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
     const key = keyFrom(companyId, peopleId);
     const sanitizedKey = sanitizeStorageKey(key);
     const forceRestart = !!opts.forceRestart;
+    const sessionPath = sessionPathForKey(key);
+    const cachePath = cachePathForKey(key);
 
     // Se já existir e for pra reiniciar, derruba e recria
     if (instances.has(key)) {
         const entry = instances.get(key);
+        entry.key = entry.key || key;
+        entry.companyId = entry.companyId || companyId;
+        entry.peopleId = entry.peopleId || peopleId;
         if (forceRestart) {
             try {
                 entry.status = 'restarting';
@@ -234,6 +270,7 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
             } catch (_) {}
             instances.delete(key);
         } else {
+            console.log(`[INSTANCE] Reusing existing instance for key=${key} (status=${entry.status})`);
             // já existe e não queremos reiniciar: apenas retorna
             return instances.get(key);
         }
@@ -245,13 +282,18 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
 
     await ensureStorageConsistency(key, sanitizedKey);
 
+    console.log(`[INSTANCE] Creating client for key=${key} companyId=${companyId} peopleId=${peopleId} forceRestart=${forceRestart} clientId=${sanitizedKey} sessionPath=${sessionPath} cachePath=${cachePath}`);
+
     // Cria entry inicial
     const entry = {
         client: null,
         status: 'starting',
         lastQR: null,
         readyInfo: null,
-        startingAt: new Date()
+        startingAt: new Date(),
+        key,
+        companyId,
+        peopleId
     };
     instances.set(key, entry);
 
@@ -259,14 +301,14 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
     const auth = new LocalAuth({
         // clientId evita colisão dentro do mesmo dataPath
         clientId: sanitizedKey,
-        dataPath: sessionPathForKey(key)
+        dataPath: sessionPath
     });
 
     const clientHeadless = opts.headless !== undefined ? !!opts.headless : HEADLESS;
 
     const client = new Client({
         authStrategy: auth,
-        webVersionCache: { type: 'local', path: cachePathForKey(key) },
+        webVersionCache: { type: 'local', path: cachePath },
         takeoverOnConflict: true,
         takeoverTimeoutMs: 60_000,
         puppeteer: {
@@ -322,6 +364,7 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
     entry.client = client;
 
     // Inicia
+    console.log(`[INSTANCE] Initializing client for key=${key} companyId=${companyId} peopleId=${peopleId}`);
     client.initialize().catch((e) => {
         entry.status = 'failed';
         console.error(`[INIT_ERROR] ${key}`, e);
@@ -348,9 +391,9 @@ router.post('/instance/start', async (req, res, next) => {
         }
 
         const entry = await ensureInstance(companyId, peopleId, { forceRestart: toBool(forceRestart) });
-        const { qr, timedOut, status } = await waitForNewQr(entry);
+        const { qr, timedOut, status, logContext } = await waitForNewQr(entry);
 
-        return res.json({
+        const payload = {
             ok: true,
             companyId,
             peopleId,
@@ -358,7 +401,12 @@ router.post('/instance/start', async (req, res, next) => {
             readyInfo: entry.readyInfo || null,
             qr: buildQrPayload(qr),
             qrTimedOut: timedOut
-        });
+        };
+        if (timedOut && logContext) {
+            payload.qrWaitLogContext = logContext;
+        }
+
+        return res.json(payload);
     } catch (e) {
         next(e);
     }
@@ -377,9 +425,9 @@ router.post('/instance/restart', async (req, res, next) => {
         }
 
         const entry = await ensureInstance(companyId, peopleId, { forceRestart: true });
-        const { qr, timedOut, status } = await waitForNewQr(entry);
+        const { qr, timedOut, status, logContext } = await waitForNewQr(entry);
 
-        return res.json({
+        const payload = {
             ok: true,
             companyId,
             peopleId,
@@ -387,7 +435,12 @@ router.post('/instance/restart', async (req, res, next) => {
             readyInfo: entry.readyInfo || null,
             qr: buildQrPayload(qr),
             qrTimedOut: timedOut
-        });
+        };
+        if (timedOut && logContext) {
+            payload.qrWaitLogContext = logContext;
+        }
+
+        return res.json(payload);
     } catch (e) {
         next(e);
     }
