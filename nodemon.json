@@ -1,6 +1,10 @@
 {
-    "ignore": ["**/*.test.ts", "**/*.spec.ts", "node_modules"],
-    "watch": ["*"],
-    "exec": "npm start",
-    "ext": "*"
+  "ignore": ["**/*.test.ts", "**/*.spec.ts", "node_modules"],
+  "watch": ["*"],
+  "exec": "npm start",
+  "ext": "*",
+  "env": {
+    "NODE_ENV": "development",
+    "HEADLESS": "false"
   }
+}
