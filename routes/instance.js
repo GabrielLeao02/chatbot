@@ -7,6 +7,8 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
 const qrcodeTerm = require('qrcode-terminal');
 
+const logger = require('../lib/logger');
+
 const router = express.Router();
 
 /* ==========================
@@ -116,7 +118,7 @@ async function migrateDirectoryIfNeeded(from, to) {
         await fs.mkdir(path.dirname(to), { recursive: true });
         await fs.rename(from, to);
     } catch (err) {
-        console.warn(`[WARN] Falha ao migrar diretório de ${from} para ${to}:`, err);
+        logger.warn(`[WARN] Falha ao migrar diretório de ${from} para ${to}:`, err);
     }
 }
 
@@ -148,7 +150,7 @@ async function ensureStorageConsistency(key, sanitizedKey) {
             await fs.rename(legacySessionFolder, sanitizedSessionFolder);
         }
     } catch (err) {
-        console.warn(`[WARN] Falha ao migrar sessão de ${legacySessionFolder} para ${sanitizedSessionFolder}:`, err);
+        logger.warn(`[WARN] Falha ao migrar sessão de ${legacySessionFolder} para ${sanitizedSessionFolder}:`, err);
     }
 }
 
@@ -183,7 +185,7 @@ async function waitForNewQr(entry, { timeoutMs = WAIT_FOR_QR_TIMEOUT_MS, pollEve
         : Math.max(5000, pollEveryMs * 20);
 
     if (!entry) {
-        console.log('[QR_WAIT] (no-entry) Skip wait: instance entry not created');
+        logger.info('[QR_WAIT] (no-entry) Skip wait: instance entry not created');
         return { qr: null, timedOut: false, status: 'not_created', logContext: null };
     }
 
@@ -191,7 +193,7 @@ async function waitForNewQr(entry, { timeoutMs = WAIT_FOR_QR_TIMEOUT_MS, pollEve
 
     if (entry.lastQR) {
         const contextId = `${key}:${Date.now()}`;
-        console.log(`[QR_WAIT] (${contextId}) Returning cached QR without waiting`);
+        logger.info(`[QR_WAIT] (${contextId}) Returning cached QR without waiting`);
         return { qr: entry.lastQR, timedOut: false, status: entry.status, logContext: contextId };
     }
 
@@ -202,18 +204,18 @@ async function waitForNewQr(entry, { timeoutMs = WAIT_FOR_QR_TIMEOUT_MS, pollEve
         const contextId = `${key}:${startedAt}`;
         let lastBeatAt = startedAt;
 
-        console.log(`[QR_WAIT] (${contextId}) Starting wait (status=${entry.status}, timeoutMs=${timeoutMs}, pollEveryMs=${pollEveryMs})`);
+        logger.info(`[QR_WAIT] (${contextId}) Starting wait (status=${entry.status}, timeoutMs=${timeoutMs}, pollEveryMs=${pollEveryMs})`);
 
         const finish = (qr, timedOut, reason) => {
             const elapsed = Date.now() - startedAt;
             if (reason === 'qr') {
-                console.log(`[QR_WAIT] (${contextId}) QR received after ${elapsed}ms (status=${entry.status})`);
+                logger.info(`[QR_WAIT] (${contextId}) QR received after ${elapsed}ms (status=${entry.status})`);
             } else if (reason === 'terminal') {
-                console.log(`[QR_WAIT] (${contextId}) Finished due to terminal status=${entry.status} after ${elapsed}ms`);
+                logger.info(`[QR_WAIT] (${contextId}) Finished due to terminal status=${entry.status} after ${elapsed}ms`);
             } else if (reason === 'timeout') {
-                console.log(`[QR_WAIT] (${contextId}) Timed out after ${elapsed}ms (lastStatus=${entry.status})`);
+                logger.warn(`[QR_WAIT] (${contextId}) Timed out after ${elapsed}ms (lastStatus=${entry.status})`);
             } else {
-                console.log(`[QR_WAIT] (${contextId}) Finished (reason=${reason}) after ${elapsed}ms (status=${entry.status})`);
+                logger.info(`[QR_WAIT] (${contextId}) Finished (reason=${reason}) after ${elapsed}ms (status=${entry.status})`);
             }
             resolve({ qr, timedOut, status: entry.status, logContext: contextId });
         };
@@ -230,7 +232,7 @@ async function waitForNewQr(entry, { timeoutMs = WAIT_FOR_QR_TIMEOUT_MS, pollEve
                 return finish(null, true, 'timeout');
             }
             if (now - lastBeatAt >= beatEveryMs) {
-                console.log(`[QR_WAIT] (${contextId}) Still waiting... elapsed=${now - startedAt}ms status=${entry.status}`);
+                logger.info(`[QR_WAIT] (${contextId}) Still waiting... elapsed=${now - startedAt}ms status=${entry.status}`);
                 lastBeatAt = now;
             }
             setTimeout(check, pollEveryMs);
@@ -270,7 +272,7 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
             } catch (_) {}
             instances.delete(key);
         } else {
-            console.log(`[INSTANCE] Reusing existing instance for key=${key} (status=${entry.status})`);
+            logger.info(`[INSTANCE] Reusing existing instance for key=${key} (status=${entry.status})`);
             // já existe e não queremos reiniciar: apenas retorna
             return instances.get(key);
         }
@@ -282,7 +284,7 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
 
     await ensureStorageConsistency(key, sanitizedKey);
 
-    console.log(`[INSTANCE] Creating client for key=${key} companyId=${companyId} peopleId=${peopleId} forceRestart=${forceRestart} clientId=${sanitizedKey} sessionPath=${sessionPath} cachePath=${cachePath}`);
+    logger.info(`[INSTANCE] Creating client for key=${key} companyId=${companyId} peopleId=${peopleId} forceRestart=${forceRestart} clientId=${sanitizedKey} sessionPath=${sessionPath} cachePath=${cachePath}`);
 
     // Cria entry inicial
     const entry = {
@@ -335,12 +337,12 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
 
         // opcional: mostrar no terminal
         qrcodeTerm.generate(qr, { small: true });
-        console.log(`[QR] ${key} @ ${ts}`);
+        logger.info(`[QR] ${key} @ ${ts}`);
     });
 
     client.on('authenticated', () => {
         entry.status = 'authenticated';
-        console.log(`[AUTH] ${key} autenticado…`);
+        logger.info(`[AUTH] ${key} autenticado…`);
     });
 
     client.on('ready', async () => {
@@ -348,26 +350,26 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
         const wid = client.info?.wid?.user || null;
         const pushname = client.info?.pushname || null;
         entry.readyInfo = { wid, pushname, ts: new Date().toISOString() };
-        console.log(`[READY] ${key} OK - WID ${wid}`);
+        logger.info(`[READY] ${key} OK - WID ${wid}`);
     });
 
     client.on('auth_failure', (m) => {
         entry.status = 'failed';
-        console.log(`[AUTH_FAIL] ${key} - ${m}`);
+        logger.warn(`[AUTH_FAIL] ${key} - ${m}`);
     });
 
     client.on('disconnected', (r) => {
         entry.status = 'disconnected';
-        console.log(`[DISCONNECTED] ${key} - reason: ${r}`);
+        logger.warn(`[DISCONNECTED] ${key} - reason: ${r}`);
     });
 
     entry.client = client;
 
     // Inicia
-    console.log(`[INSTANCE] Initializing client for key=${key} companyId=${companyId} peopleId=${peopleId}`);
+    logger.info(`[INSTANCE] Initializing client for key=${key} companyId=${companyId} peopleId=${peopleId}`);
     client.initialize().catch((e) => {
         entry.status = 'failed';
-        console.error(`[INIT_ERROR] ${key}`, e);
+        logger.error(`[INIT_ERROR] ${key}`, e);
     });
 
     return entry;
