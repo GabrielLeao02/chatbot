@@ -41,11 +41,31 @@ const instances = new Map();
 function keyFrom(companyId, peopleId) {
     return `${companyId}:${peopleId}`;
 }
+
+function sanitizeStorageKey(key) {
+    if (!key) return '';
+    const sanitized = key.replace(/[^0-9a-zA-Z_-]/g, '_');
+    if (sanitized.length > 0) {
+        return sanitized;
+    }
+    // Fallback determinístico caso o replace zere a string
+    return Buffer.from(key).toString('hex');
+}
+
 function sessionPathForKey(key) {
-    // Mantém uma pasta por par COMPANY_ID/PEOPLE_ID
+    // Mantém uma pasta por par COMPANY_ID/PEOPLE_ID (saneando o identificador)
+    return path.join(DATA_ROOT, 'wwebjs_auth', sanitizeStorageKey(key));
+}
+
+function legacySessionPathForKey(key) {
     return path.join(DATA_ROOT, 'wwebjs_auth', key);
 }
+
 function cachePathForKey(key) {
+    return path.join(DATA_ROOT, 'webjs_cache', sanitizeStorageKey(key));
+}
+
+function legacyCachePathForKey(key) {
     return path.join(DATA_ROOT, 'webjs_cache', key);
 }
 function toBool(x) {
@@ -58,10 +78,76 @@ async function ensureDirs() {
     await fs.mkdir(path.join(DATA_ROOT, 'webjs_cache'), { recursive: true });
 }
 
+async function pathExists(target) {
+    try {
+        await fs.access(target);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+async function migrateDirectoryIfNeeded(from, to) {
+    if (from === to) return;
+    try {
+        const [fromExists, toExists] = await Promise.all([
+            pathExists(from),
+            pathExists(to)
+        ]);
+        if (!fromExists || toExists) {
+            return;
+        }
+        await fs.mkdir(path.dirname(to), { recursive: true });
+        await fs.rename(from, to);
+    } catch (err) {
+        console.warn(`[WARN] Falha ao migrar diretório de ${from} para ${to}:`, err);
+    }
+}
+
+async function ensureStorageConsistency(key, sanitizedKey) {
+    if (!key || sanitizedKey === key) {
+        return;
+    }
+
+    const sessionTarget = sessionPathForKey(key);
+    const cacheTarget = cachePathForKey(key);
+    await Promise.all([
+        migrateDirectoryIfNeeded(legacySessionPathForKey(key), sessionTarget),
+        migrateDirectoryIfNeeded(legacyCachePathForKey(key), cacheTarget)
+    ]);
+
+    const legacySessionFolder = path.join(sessionTarget, `session-${key}`);
+    const sanitizedSessionFolder = path.join(sessionTarget, `session-${sanitizedKey}`);
+
+    if (legacySessionFolder === sanitizedSessionFolder) {
+        return;
+    }
+
+    try {
+        const [legacyExists, sanitizedExists] = await Promise.all([
+            pathExists(legacySessionFolder),
+            pathExists(sanitizedSessionFolder)
+        ]);
+        if (legacyExists && !sanitizedExists) {
+            await fs.rename(legacySessionFolder, sanitizedSessionFolder);
+        }
+    } catch (err) {
+        console.warn(`[WARN] Falha ao migrar sessão de ${legacySessionFolder} para ${sanitizedSessionFolder}:`, err);
+    }
+}
+
 async function wipeStoredSessionData(key) {
-    const targets = [sessionPathForKey(key), cachePathForKey(key)];
+    const sanitizedKey = sanitizeStorageKey(key);
+    const targets = new Set([
+        sessionPathForKey(key),
+        cachePathForKey(key)
+    ]);
+    if (sanitizedKey !== key) {
+        targets.add(legacySessionPathForKey(key));
+        targets.add(legacyCachePathForKey(key));
+    }
     await Promise.allSettled(
-        targets.map((target) => fs.rm(target, { recursive: true, force: true }))
+        Array.from(targets).map((target) => fs.rm(target, { recursive: true, force: true }))
     );
 }
 
@@ -113,6 +199,7 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
     await ensureDirs();
 
     const key = keyFrom(companyId, peopleId);
+    const sanitizedKey = sanitizeStorageKey(key);
     const forceRestart = !!opts.forceRestart;
 
     // Se já existir e for pra reiniciar, derruba e recria
@@ -136,6 +223,8 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
         await wipeStoredSessionData(key);
     }
 
+    await ensureStorageConsistency(key, sanitizedKey);
+
     // Cria entry inicial
     const entry = {
         client: null,
@@ -149,7 +238,7 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
     // Config do cliente
     const auth = new LocalAuth({
         // clientId evita colisão dentro do mesmo dataPath
-        clientId: key,
+        clientId: sanitizedKey,
         dataPath: sessionPathForKey(key)
     });
 
