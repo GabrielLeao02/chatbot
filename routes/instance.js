@@ -13,12 +13,28 @@ const router = express.Router();
    Config via ENV
    ========================== */
 const PORT = parseInt(process.env.PORT || '8081', 10);
-const HEADLESS = String(process.env.HEADLESS || 'true').toLowerCase() === 'true';
+const NODE_ENV = (process.env.NODE_ENV || '').toLowerCase();
+const HEADLESS = (() => {
+    if (process.env.HEADLESS !== undefined) {
+        return String(process.env.HEADLESS).toLowerCase() === 'true';
+    }
+    return NODE_ENV === 'development' ? false : true;
+})();
 const DATA_ROOT = process.env.DATA_ROOT || path.join(process.cwd(), 'cache');
 const PUPPETEER_ARGS = (process.env.PUPPETEER_ARGS || '')
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
+const WAIT_FOR_QR_TIMEOUT_MS = (() => {
+    const fallback = 45000;
+    const parsed = parseInt(process.env.WAIT_FOR_QR_TIMEOUT_MS || `${fallback}`, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+})();
+const WAIT_FOR_QR_POLL_MS = (() => {
+    const fallback = 250;
+    const parsed = parseInt(process.env.WAIT_FOR_QR_POLL_MS || `${fallback}`, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+})();
 
 /* ==========================
    Estado em memória
@@ -41,11 +57,31 @@ const instances = new Map();
 function keyFrom(companyId, peopleId) {
     return `${companyId}:${peopleId}`;
 }
+
+function sanitizeStorageKey(key) {
+    if (!key) return '';
+    const sanitized = key.replace(/[^0-9a-zA-Z_-]/g, '_');
+    if (sanitized.length > 0) {
+        return sanitized;
+    }
+    // Fallback determinístico caso o replace zere a string
+    return Buffer.from(key).toString('hex');
+}
+
 function sessionPathForKey(key) {
-    // Mantém uma pasta por par COMPANY_ID/PEOPLE_ID
+    // Mantém uma pasta por par COMPANY_ID/PEOPLE_ID (saneando o identificador)
+    return path.join(DATA_ROOT, 'wwebjs_auth', sanitizeStorageKey(key));
+}
+
+function legacySessionPathForKey(key) {
     return path.join(DATA_ROOT, 'wwebjs_auth', key);
 }
+
 function cachePathForKey(key) {
+    return path.join(DATA_ROOT, 'webjs_cache', sanitizeStorageKey(key));
+}
+
+function legacyCachePathForKey(key) {
     return path.join(DATA_ROOT, 'webjs_cache', key);
 }
 function toBool(x) {
@@ -58,10 +94,76 @@ async function ensureDirs() {
     await fs.mkdir(path.join(DATA_ROOT, 'webjs_cache'), { recursive: true });
 }
 
+async function pathExists(target) {
+    try {
+        await fs.access(target);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+async function migrateDirectoryIfNeeded(from, to) {
+    if (from === to) return;
+    try {
+        const [fromExists, toExists] = await Promise.all([
+            pathExists(from),
+            pathExists(to)
+        ]);
+        if (!fromExists || toExists) {
+            return;
+        }
+        await fs.mkdir(path.dirname(to), { recursive: true });
+        await fs.rename(from, to);
+    } catch (err) {
+        console.warn(`[WARN] Falha ao migrar diretório de ${from} para ${to}:`, err);
+    }
+}
+
+async function ensureStorageConsistency(key, sanitizedKey) {
+    if (!key || sanitizedKey === key) {
+        return;
+    }
+
+    const sessionTarget = sessionPathForKey(key);
+    const cacheTarget = cachePathForKey(key);
+    await Promise.all([
+        migrateDirectoryIfNeeded(legacySessionPathForKey(key), sessionTarget),
+        migrateDirectoryIfNeeded(legacyCachePathForKey(key), cacheTarget)
+    ]);
+
+    const legacySessionFolder = path.join(sessionTarget, `session-${key}`);
+    const sanitizedSessionFolder = path.join(sessionTarget, `session-${sanitizedKey}`);
+
+    if (legacySessionFolder === sanitizedSessionFolder) {
+        return;
+    }
+
+    try {
+        const [legacyExists, sanitizedExists] = await Promise.all([
+            pathExists(legacySessionFolder),
+            pathExists(sanitizedSessionFolder)
+        ]);
+        if (legacyExists && !sanitizedExists) {
+            await fs.rename(legacySessionFolder, sanitizedSessionFolder);
+        }
+    } catch (err) {
+        console.warn(`[WARN] Falha ao migrar sessão de ${legacySessionFolder} para ${sanitizedSessionFolder}:`, err);
+    }
+}
+
 async function wipeStoredSessionData(key) {
-    const targets = [sessionPathForKey(key), cachePathForKey(key)];
+    const sanitizedKey = sanitizeStorageKey(key);
+    const targets = new Set([
+        sessionPathForKey(key),
+        cachePathForKey(key)
+    ]);
+    if (sanitizedKey !== key) {
+        targets.add(legacySessionPathForKey(key));
+        targets.add(legacyCachePathForKey(key));
+    }
     await Promise.allSettled(
-        targets.map((target) => fs.rm(target, { recursive: true, force: true }))
+        Array.from(targets).map((target) => fs.rm(target, { recursive: true, force: true }))
     );
 }
 
@@ -75,10 +177,12 @@ function buildQrPayload(qr) {
     };
 }
 
-async function waitForNewQr(entry, timeoutMs = 15000, pollEveryMs = 250) {
-    if (!entry) return null;
+async function waitForNewQr(entry, { timeoutMs = WAIT_FOR_QR_TIMEOUT_MS, pollEveryMs = WAIT_FOR_QR_POLL_MS } = {}) {
+    if (!entry) {
+        return { qr: null, timedOut: false, status: 'not_created' };
+    }
     if (entry.lastQR) {
-        return entry.lastQR;
+        return { qr: entry.lastQR, timedOut: false, status: entry.status };
     }
 
     const terminalStates = new Set(['failed', 'disconnected', 'ready', 'authenticated']);
@@ -86,15 +190,17 @@ async function waitForNewQr(entry, timeoutMs = 15000, pollEveryMs = 250) {
     return new Promise((resolve) => {
         const startedAt = Date.now();
 
+        const finish = (qr, timedOut) => resolve({ qr, timedOut, status: entry.status });
+
         const check = () => {
             if (entry.lastQR) {
-                return resolve(entry.lastQR);
+                return finish(entry.lastQR, false);
             }
             if (terminalStates.has(entry.status)) {
-                return resolve(null);
+                return finish(null, false);
             }
             if (Date.now() - startedAt >= timeoutMs) {
-                return resolve(null);
+                return finish(null, true);
             }
             setTimeout(check, pollEveryMs);
         };
@@ -113,6 +219,7 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
     await ensureDirs();
 
     const key = keyFrom(companyId, peopleId);
+    const sanitizedKey = sanitizeStorageKey(key);
     const forceRestart = !!opts.forceRestart;
 
     // Se já existir e for pra reiniciar, derruba e recria
@@ -136,6 +243,8 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
         await wipeStoredSessionData(key);
     }
 
+    await ensureStorageConsistency(key, sanitizedKey);
+
     // Cria entry inicial
     const entry = {
         client: null,
@@ -149,9 +258,11 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
     // Config do cliente
     const auth = new LocalAuth({
         // clientId evita colisão dentro do mesmo dataPath
-        clientId: key,
+        clientId: sanitizedKey,
         dataPath: sessionPathForKey(key)
     });
+
+    const clientHeadless = opts.headless !== undefined ? !!opts.headless : HEADLESS;
 
     const client = new Client({
         authStrategy: auth,
@@ -159,7 +270,8 @@ async function ensureInstance(companyId, peopleId, opts = {}) {
         takeoverOnConflict: true,
         takeoverTimeoutMs: 60_000,
         puppeteer: {
-            headless: opts.headless !== undefined ? !!opts.headless : HEADLESS,
+            headless: clientHeadless,
+            devtools: !clientHeadless,
             args: PUPPETEER_ARGS.length
                 ? PUPPETEER_ARGS
                 : ['--no-sandbox', '--disable-setuid-sandbox'] // seguro em servidor
@@ -236,14 +348,16 @@ router.post('/instance/start', async (req, res, next) => {
         }
 
         const entry = await ensureInstance(companyId, peopleId, { forceRestart: toBool(forceRestart) });
+        const { qr, timedOut, status } = await waitForNewQr(entry);
 
         return res.json({
             ok: true,
             companyId,
             peopleId,
-            status: entry.status,
+            status,
             readyInfo: entry.readyInfo || null,
-            qr: buildQrPayload(entry.lastQR)
+            qr: buildQrPayload(qr),
+            qrTimedOut: timedOut
         });
     } catch (e) {
         next(e);
@@ -263,14 +377,16 @@ router.post('/instance/restart', async (req, res, next) => {
         }
 
         const entry = await ensureInstance(companyId, peopleId, { forceRestart: true });
-        const qrInfo = await waitForNewQr(entry);
+        const { qr, timedOut, status } = await waitForNewQr(entry);
 
         return res.json({
             ok: true,
             companyId,
             peopleId,
-            status: entry.status,
-            qr: buildQrPayload(qrInfo)
+            status,
+            readyInfo: entry.readyInfo || null,
+            qr: buildQrPayload(qr),
+            qrTimedOut: timedOut
         });
     } catch (e) {
         next(e);
