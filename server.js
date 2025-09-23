@@ -8,6 +8,8 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
 const qrcodeTerm = require('qrcode-terminal');
 
+const { getDataRoot } = require('./lib/paths');
+
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
@@ -16,7 +18,7 @@ app.use(express.json({ limit: '2mb' }));
    ========================== */
 const PORT = parseInt(process.env.PORT || '8081', 10);
 const HEADLESS = String(process.env.HEADLESS || 'true').toLowerCase() === 'true';
-const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, 'data'); // onde salvamos sessões
+const DATA_ROOT = getDataRoot(); // onde salvamos sessões
 const PUPPETEER_ARGS = (process.env.PUPPETEER_ARGS || '')
   .split(',')
   .map(s => s.trim())
